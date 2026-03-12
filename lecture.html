@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Лекция-ассистент</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #09090f; --surface: #111118; --border: #1e1e2e;
+    --text: #e2e8f0; --muted: #4a5568; --accent: #4f8ef7;
+    --green: #22c55e; --red: #ef4444; --yellow: #f59e0b;
+  }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    min-height: 100vh; display: flex; align-items: flex-start;
+    justify-content: center; padding: 32px 16px;
+  }
+  .app { width: 100%; max-width: 640px; }
+  .logo { text-align: center; margin-bottom: 28px; }
+  .logo-badge {
+    display: inline-block; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 99px;
+    padding: 4px 14px; font-size: 11px; letter-spacing: 2px;
+    color: var(--accent); text-transform: uppercase; margin-bottom: 10px;
+  }
+  .logo h1 { font-size: 22px; font-weight: 600; color: #fff; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 24px; margin-bottom: 16px; }
+  .setup-icon { font-size: 40px; text-align: center; margin-bottom: 16px; }
+  .setup-title { font-size: 17px; font-weight: 600; text-align: center; margin-bottom: 8px; }
+  .setup-desc { font-size: 13px; color: var(--muted); text-align: center; line-height: 1.65; margin-bottom: 20px; }
+  .setup-desc a { color: var(--accent); }
+  .setup-steps { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 16px; font-size: 13px; color: var(--muted); line-height: 1.9; }
+  .setup-steps b { color: var(--text); }
+  .input-wrap { position: relative; margin-bottom: 12px; }
+  .input-wrap input, .input-wrap select {
+    width: 100%; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 14px; color: var(--text);
+    font-size: 14px; font-family: 'Courier New', monospace; outline: none; transition: border-color 0.2s;
+    -webkit-appearance: none;
+  }
+  .input-wrap select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%2364748b' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='m6 8 4 4 4-4'/%3E%3C/svg%3E");
+    background-position: right 12px center;
+    background-repeat: no-repeat;
+    background-size: 1em;
+    padding-right: 40px;
+  }
+  .input-wrap input:focus, .input-wrap select:focus { border-color: var(--accent); }
+  .eye-btn { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; color: var(--muted); font-size: 16px; padding: 0; }
+  .btn { display: block; width: 100%; border: none; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; padding: 13px; transition: opacity 0.15s, transform 0.1s; font-family: inherit; margin-bottom: 8px; }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn:active { transform: scale(0.98); }
+  .btn:last-child { margin-bottom: 0; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-danger  { background: var(--red); color: #fff; font-size: 17px; padding: 20px; letter-spacing: 1px; animation: pulse 2s ease-in-out infinite; }
+  .btn-ghost   { background: transparent; border: 1px solid var(--border); color: var(--muted); }
+  .status-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .status-left { display: flex; align-items: center; gap: 8px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: blink 1.2s ease-in-out infinite; }
+  .status-label { font-size: 12px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: var(--green); }
+  .word-count { font-size: 12px; color: var(--muted); }
+  .transcript {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 16px;
+    min-height: 180px; max-height: 280px; overflow-y: auto;
+    font-size: 14px; line-height: 1.85; color: #94a3b8; white-space: pre-wrap; word-break: break-word; margin-bottom: 16px;
+  }
+  .placeholder { color: #2d3748; }
+  .mic-check-wrap { margin-top: 16px; }
+  .mic-check-wrap progress {
+    width: 100%; height: 8px; -webkit-appearance: none; appearance: none;
+    border-radius: 4px; overflow: hidden; border: 1px solid var(--border);
+    margin-top: 8px;
+  }
+  .mic-check-wrap progress::-webkit-progress-bar { background-color: var(--bg); }
+  .mic-check-wrap progress::-webkit-progress-value { background-color: var(--green); transition: width 0.1s; }
+  .mic-note { font-size: 12px; color: var(--muted); line-height: 1.7; margin-top: 10px; }
+  .mic-controls { display: flex; gap: 16px; align-items: center; margin-top: 16px; }
+  .mic-controls label { font-size: 13px; display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  .mic-controls input[type=range] { width: 120px; }
+
+  .countdown-wrap { text-align: center; margin-bottom: 20px; }
+  .countdown-num { font-size: 80px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; transition: color 0.3s; }
+  .countdown-label { font-size: 12px; letter-spacing: 2px; color: var(--muted); margin-top: 4px; text-transform: uppercase; }
+  .question-transcript { background: rgba(245,158,11,0.06); border: 1px solid rgba(245,158,11,0.2); border-radius: 10px; padding: 16px; min-height: 70px; font-size: 15px; line-height: 1.7; color: #fde68a; margin-bottom: 16px; }
+  .thinking-wrap { text-align: center; padding: 40px 0; }
+  .spinner { width: 44px; height: 44px; border: 3px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.7s linear infinite; margin: 0 auto 16px; }
+  .thinking-label { color: var(--accent); font-size: 15px; }
+  .answer-card { background: rgba(34,197,94,0.06); border: 1px solid rgba(34,197,94,0.25); border-radius: 12px; padding: 22px; margin-bottom: 16px; }
+  .answer-tag { font-size: 10px; letter-spacing: 3px; font-weight: 700; color: #4ade80; text-transform: uppercase; margin-bottom: 12px; }
+  .answer-text { font-size: 20px; line-height: 1.75; color: #dcfce7; }
+  .debug-toggle { background: none; border: none; color: var(--muted); font-size: 12px; cursor: pointer; padding: 4px 0; text-decoration: underline; font-family: inherit; }
+  .debug-panel { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-top: 10px; font-size: 12px; color: var(--muted); line-height: 1.7; display: none; }
+  .debug-panel.open { display: block; }
+  .error-box { background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.3); border-radius: 10px; padding: 12px 16px; color: #fca5a5; font-size: 13px; margin-bottom: 16px; display: none; line-height: 1.5; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+  @keyframes spin  { to { transform: rotate(360deg); } }
+  @keyframes pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.02)} }
+  @keyframes fadeUp { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
+  .fade-up { animation: fadeUp 0.3s ease forwards; }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="logo">
+    <div class="logo-badge">Gemini · бесплатно</div>
+    <h1>Лекция-ассистент 🎓</h1>
+  </div>
+  <div id="error-box" class="error-box"></div>
+  <div id="screen"></div>
+</div>
+<script>
+let apiKey = '', phase = 'setup';
+let lectureText = '', questionText = '';
+// Убрали countdown и cdInterval, добавили isPaused
+let isPaused = false, rec = null, debugOpen = false;
+let streamController = null;
+
+// --- Microphone-related state ---
+let micStream = null;
+let audioContext = null;
+let analyser = null;
+let gainNode = null;
+let selectedMicId = null;
+
+const showErr = (m) => { const e = document.getElementById('error-box'); e.innerHTML = m; e.style.display = 'block'; };
+const hideErr = () => { document.getElementById('error-box').style.display = 'none'; };
+
+function initSpeech() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { showErr('Нужен <b>Chrome</b> — только он поддерживает распознавание речи.'); return; }
+
+  rec = new SR();
+  rec.lang = 'ru-RU';
+  rec.continuous = true;
+  rec.interimResults = true;
+
+  rec.onstart = () => console.log('🎙️ [Chrome] Микрофон запущен');
+  rec.onaudiostart = () => console.log('🔊 [Chrome] Начался захват аудио');
+  rec.onsoundstart = () => console.log('🔈 [Chrome] Обнаружен звук');
+  rec.onspeechstart = () => console.log('🗣️ [Chrome] Обнаружена человеческая речь');
+  rec.onnomatch = () => console.log('🤷 [Chrome] Речь не распознана сервером');
+
+  rec.onresult = (e) => {
+    let interimText = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) {
+        if (phase === 'lecture') lectureText += t.trim() + ' ';
+        if (phase === 'question') questionText += t.trim() + ' ';
+      } else {
+        interimText += t;
+      }
+    }
+
+    if (phase === 'lecture') {
+        const box = document.getElementById('lecture-box');
+        const finalEl = document.getElementById('lecture-final-text');
+        const interimEl = document.getElementById('lecture-interim-text');
+        const placeholder = box ? box.querySelector('.placeholder') : null;
+
+        if (finalEl) finalEl.textContent = lectureText;
+        if (interimEl) interimEl.textContent = interimText;
+        if (placeholder && (lectureText || interimText)) placeholder.style.display = 'none';
+        if (box) box.scrollTop = box.scrollHeight;
+        
+        const wc = document.getElementById('word-count');
+        const totalWords = (lectureText + interimText).trim().split(/\s+/).filter(Boolean).length;
+        if (wc) wc.textContent = totalWords + ' слов';
+    }
+
+    if (phase === 'question') {
+        const box = document.getElementById('question-box');
+        const finalEl = document.getElementById('question-final-text');
+        const interimEl = document.getElementById('question-interim-text');
+        const placeholder = box ? box.querySelector('.placeholder') : null;
+
+        if (finalEl) finalEl.textContent = questionText;
+        if (interimEl) interimEl.textContent = interimText;
+        if (placeholder && (questionText || interimText)) placeholder.style.display = 'none';
+    }
+  };
+
+  rec.onerror = (e) => {
+    console.error('❌ [Chrome] Ошибка:', e.error);
+    if (e.error === 'not-allowed') showErr('Доступ к микрофону запрещён. Нажми 🔒 в адресной строке и разреши микрофон для localhost.');
+    else if (e.error === 'network') showErr('Нет интернета — распознавание речи требует сеть.');
+    else if (e.error !== 'no-speech' && e.error !== 'aborted') showErr('Ошибка: ' + e.error);
+  };
+
+  rec.onend = () => {
+    // Если запись прервалась, но мы НЕ нажимали паузу — перезапускаем автоматически
+    if ((phase === 'lecture' || phase === 'question') && !isPaused) {
+      console.log('🛑 [Chrome] Распознавание остановлено (перезапускаем...)');
+      setTimeout(() => { if (rec) { try { rec.start(); } catch(_) {} } }, 150);
+    }
+  };
+}
+
+async function populateMicList() {
+    const selector = document.getElementById('mic-select');
+    if (!selector) return;
+    try {
+        await navigator.mediaDevices.getUserMedia({ audio: true });
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioDevices = devices.filter(d => d.kind === 'audioinput');
+        selector.innerHTML = '';
+        if (audioDevices.length === 0) {
+            selector.innerHTML = '<option>Микрофоны не найдены</option>';
+            return;
+        }
+        audioDevices.forEach((d, i) => {
+            const opt = document.createElement('option');
+            opt.value = d.deviceId;
+            opt.text = d.label || `Микрофон ${i + 1}`;
+            selector.appendChild(opt);
+        });
+        selectedMicId = selector.value;
+        startVolumeMeter(selectedMicId);
+    } catch (e) {
+        if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError') {
+          showErr('<b>Доступ к микрофону запрещен.</b> Пожалуйста, разрешите доступ к микрофону в настройках вашего браузера (обычно это значок 🔒 в адресной строке).');
+        } else {
+          showErr('Не удалось получить доступ к микрофону: ' + e.message);
+        }
+        const setupBtn = document.getElementById('setup-btn');
+        if(setupBtn) setupBtn.disabled = true;
+    }
+}
+
+function startVolumeMeter(deviceId) {
+    if (micStream) micStream.getTracks().forEach(track => track.stop());
+    if (audioContext) audioContext.close();
+
+    navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: deviceId }, echoCancellation: false, noiseSuppression: false, autoGainControl: false } })
+    .then(stream => {
+        micStream = stream;
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        analyser = audioContext.createAnalyser();
+        gainNode = audioContext.createGain();
+        const source = audioContext.createMediaStreamSource(stream);
+        
+        source.connect(gainNode);
+        gainNode.connect(analyser);
+
+        const monitorCheckbox = document.getElementById('mic-monitor');
+        if (monitorCheckbox && monitorCheckbox.checked) gainNode.connect(audioContext.destination);
+
+        const gainSlider = document.getElementById('mic-gain');
+        if(gainSlider) gainNode.gain.value = gainSlider.value;
+        
+        analyser.fftSize = 512;
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        const volumeMeter = document.getElementById('mic-volume');
+
+        function updateVolume() {
+            if (!analyser) return;
+            analyser.getByteTimeDomainData(dataArray);
+            let sum = 0;
+            for(const amp of dataArray) sum += Math.pow((amp - 128) / 128, 2);
+            if(volumeMeter) volumeMeter.value = Math.sqrt(sum / dataArray.length) * 100;
+            requestAnimationFrame(updateVolume);
+        }
+        updateVolume();
+    })
+    .catch(err => showErr(`Не удалось подключиться к микрофону: ${err.message}. Разрешите доступ в настройках браузера.`));
+}
+
+function render() {
+  const el = document.getElementById('screen');
+  el.className = 'fade-up';
+
+  if (phase === 'setup') {
+    el.innerHTML = `
+      <div class="card">
+        <div class="setup-icon">🔑</div>
+        <div class="setup-title">1. Введи API ключ Gemini</div>
+        <div class="setup-desc">Это бесплатно и не требует карты. <a href="https://aistudio.google.com/apikey" target="_blank">Получить ключ</a></div>
+        <div class="input-wrap">
+          <input id="api-key-input" type="password" placeholder="AIza..." spellcheck="false" />
+          <button class="eye-btn" onclick="toggleEye()">👁</button>
+        </div>
+        <div id="mic-check-container" style="display: none;">
+            <div class="setup-icon" style="margin-top:24px;">🎙️</div>
+            <div class="setup-title">2. Проверь свой микрофон</div>
+            <div class="mic-check-wrap">
+                <div class="input-wrap"><select id="mic-select" onchange="handleMicSwitch(this.value)"></select></div>
+                <progress id="mic-volume" max="100" value="0"></progress>
+                <div class="mic-controls">
+                    <label><input type="checkbox" id="mic-monitor" onchange="handleMonitorToggle(this.checked)"> Слышать себя</label>
+                    <label>Усиление: <input type="range" id="mic-gain" min="0" max="3" value="1" step="0.1" oninput="handleGainChange(this.value)"></label>
+                </div>
+            </div>
+        </div>
+        <button id="setup-btn" class="btn btn-primary" onclick="doSetup()">Проверить ключ и микрофон</button>
+      </div>`;
+    setTimeout(() => {
+      const inp = document.getElementById('api-key-input');
+      if (inp) { inp.focus(); inp.onkeydown = e => { if (e.key === 'Enter') doSetup(); }; }
+    }, 50);
+    return;
+  }
+
+  if (phase === 'lecture') {
+    // Меняем статус-бар в зависимости от того, на паузе мы или нет
+    const statusHtml = isPaused 
+      ? `<div class="dot" style="background: var(--yellow); animation: none;"></div><span class="status-label" style="color: var(--yellow);">ЗАПИСЬ ПРИОСТАНОВЛЕНА</span>`
+      : `<div class="dot"></div><span class="status-label">Слушаю лекцию</span>`;
+
+    el.innerHTML = `
+      <div class="card">
+        <div class="status-bar">
+          <div class="status-left">${statusHtml}</div>
+          <span id="word-count" class="word-count">${lectureText.trim().split(/\s+/).filter(Boolean).length} слов</span>
+        </div>
+        <div id="lecture-box" class="transcript">
+          <span id="lecture-final-text">${lectureText}</span><span id="lecture-interim-text" style="color: #64748b"></span>
+          ${!lectureText ? '<span class="placeholder">Говорите... текст появится здесь</span>' : ''}
+        </div>
+        <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+            <button class="btn btn-ghost" style="flex: 1; margin-bottom: 0;" onclick="togglePause()">${isPaused ? '▶ Продолжить запись' : '⏸ Пауза'}</button>
+            <button class="btn btn-ghost" style="flex: 1; margin-bottom: 0;" onclick="doClear()">Очистить текст</button>
+        </div>
+        <button class="btn btn-danger" onclick="doStartQuestion()">❓  ВНИМАНИЕ, ВОПРОС!</button>
+      </div>`;
+    return;
+  }
+
+  if (phase === 'question') {
+    el.innerHTML = `
+      <div class="card">
+        <div class="status-bar">
+          <div class="status-left">
+            <div class="dot" style="background: var(--yellow);"></div>
+            <span class="status-label" style="color: var(--yellow);">Диктуй вопрос преподавателя</span>
+          </div>
+        </div>
+        <div id="question-box" class="question-transcript">
+          <span id="question-final-text">${questionText}</span><span id="question-interim-text" style="color: #fde68a;"></span>
+          ${!questionText ? '<span style="color:#fde68a; opacity: 0.6;">Слушаю вопрос...</span>' : ''}
+        </div>
+        <button class="btn btn-primary" onclick="doFinish()">⚡ Готово — сгенерировать ответы</button>
+      </div>`;
+    return;
+  }
+
+  if (phase === 'streaming') {
+    el.innerHTML = `
+      <div class="card">
+        <div class="thinking-wrap">
+          <div class="spinner"></div>
+          <div class="thinking-label">Жду ответы от моделей...</div>
+        </div>
+      </div>
+      <div id="answers-container"></div>
+      <div class="card">
+        <button class="debug-toggle" onclick="toggleDbg()">показать текст лекции и вопроса</button>
+        <div id="debug-panel" class="debug-panel ${debugOpen?'open':''}">
+          <b style="color:var(--text)">Вопрос:</b><br>${questionText||'—'}<br><br>
+          <b style="color:var(--text)">Лекция:</b><br>${lectureText||'—'}
+        </div>
+        <button class="btn btn-ghost"  onclick="doReset()" style="margin-top: 16px;">Начать заново</button>
+      </div>`;
+    return;
+  }
+}
+
+function toggleEye() { const inp = document.getElementById('api-key-input'); if (inp) inp.type = inp.type === 'password' ? 'text' : 'password'; }
+function toggleDbg() { debugOpen = !debugOpen; const p = document.getElementById('debug-panel'); if (p) p.classList.toggle('open', debugOpen); }
+
+function togglePause() {
+  isPaused = !isPaused;
+  if (isPaused) {
+    if (rec) rec.stop(); // Принудительно останавливаем микрофон
+  } else {
+    if (rec) {
+      try { rec.start(); } catch(e) {} // Снова запускаем, если сняли с паузы
+    }
+  }
+  render(); // Обновляем интерфейс
+}
+
+function doSetup() {
+    const inp = document.getElementById('api-key-input');
+    const key = (inp ? inp.value : '').trim();
+    if (key.length < 10) { showErr('Вставь ключ из Google AI Studio.'); return; }
+    apiKey = key;
+    hideErr();
+    
+    const micContainer = document.getElementById('mic-check-container');
+    const setupBtn = document.getElementById('setup-btn');
+
+    if (micContainer.style.display === 'none') {
+        micContainer.style.display = 'block';
+        inp.disabled = true;
+        setupBtn.textContent = 'Начать лекцию';
+        populateMicList();
+    } else {
+        phase = 'lecture';
+        isPaused = false;
+        render();
+        initSpeech();
+        rec.start();
+    }
+}
+
+function handleMicSwitch(deviceId) { selectedMicId = deviceId; startVolumeMeter(deviceId); }
+function handleGainChange(value) { if (gainNode) gainNode.gain.value = value; }
+function handleMonitorToggle(isChecked) {
+    if (!audioContext || !gainNode) return;
+    if (isChecked) gainNode.connect(audioContext.destination);
+    else gainNode.disconnect(audioContext.destination);
+}
+
+function doStartQuestion() {
+  if (!lectureText.trim()) { showErr('Лекция ещё не распознана — подожди пока препод заговорит.'); return; }
+  hideErr();
+  phase = 'question'; 
+  questionText = ''; 
+  
+  // Если была пауза, снимаем её перед тем как слушать вопрос
+  if (isPaused) {
+      isPaused = false;
+      if (rec) { try { rec.start(); } catch(e){} }
+  }
+  render();
+}
+
+function doFinish() {
+  phase = 'streaming';
+  render();
+  callGemini();
+}
+
+async function callGemini() {
+  streamController = new AbortController();
+  try {
+    const resp = await fetch('/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        apiKey: apiKey,
+        lecture: lectureText || '(не распознан)',
+        question: questionText || '(не распознан — дай краткий ответ по теме лекции)',
+      }),
+      signal: streamController.signal
+    });
+
+    // Hide spinner once stream starts
+    const thinkingWrap = document.querySelector('.thinking-wrap');
+    if (thinkingWrap) thinkingWrap.style.display = 'none';
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n\n');
+      buffer = lines.pop(); // Keep the last, possibly incomplete, line
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const jsonString = line.substring(6);
+            const data = JSON.parse(jsonString);
+            addAnswerCard(data);
+          } catch(e) {
+            console.error("Invalid JSON received:", line);
+          }
+        }
+      }
+    }
+
+  } catch(e) {
+    if (e.name !== 'AbortError') {
+        showErr('⚠ Ошибка сети или сервера: ' + e.message);
+        phase = 'lecture';
+        render();
+    }
+  } finally {
+    streamController = null;
+  }
+}
+
+function addAnswerCard({model, answer, error}) {
+    const container = document.getElementById('answers-container');
+    if (!container) return;
+
+    const card = document.createElement('div');
+    card.className = 'card fade-up';
+    card.style.marginBottom = '16px';
+    
+    if (error) {
+        card.classList.add('error-card');
+        
+        let shortError = "Неизвестная ошибка (нажми, чтобы развернуть)";
+        if (error.includes("429") || error.includes("RESOURCE_EXHAUSTED")) {
+            shortError = "Превышен лимит запросов (Quota Exceeded)";
+        } else if (error.includes("404") || error.includes("NOT_FOUND")) {
+            shortError = "Модель не найдена (404)";
+        }
+
+        card.style.background = 'rgba(239,68,68,0.08)';
+        card.style.border = '1px solid rgba(239,68,68,0.3)';
+        card.innerHTML = `
+          <div class="answer-tag" style="color:var(--red); margin-bottom: 8px;">${model.replace('models/', '')}</div>
+          <details style="color: #fca5a5; font-size: 14px; line-height: 1.6; cursor: pointer;">
+             <summary style="font-weight: 600; outline: none; user-select: none;">🚨 ${shortError}</summary>
+             <div style="margin-top: 10px; padding: 12px; background: rgba(0,0,0,0.25); border-radius: 8px; font-family: monospace; font-size: 11px; white-space: pre-wrap; word-break: break-all; border: 1px solid rgba(239,68,68,0.2);">
+                 ${error}
+             </div>
+          </details>`;
+          
+        container.appendChild(card);
+        
+    } else {
+        card.style.background = 'rgba(34,197,94,0.06)';
+        card.style.border = '1px solid rgba(34,197,94,0.25)';
+        
+        // ИСПРАВЛЕНИЕ: Заменили регулярки на replaceAll
+        const safeAnswer = answer.replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+        
+        card.innerHTML = `
+          <div class="answer-tag" style="margin-bottom: 12px;">${model.replace('models/', '')}</div>
+          <div class="answer-text">${safeAnswer}</div>`;
+          
+        const firstErrorCard = container.querySelector('.error-card');
+        
+        if (firstErrorCard) {
+            container.insertBefore(card, firstErrorCard);
+        } else {
+            container.appendChild(card);
+        }
+    }
+}
+
+function doContinue() { phase = 'lecture'; render(); }
+function doClear() { lectureText = ''; render(); }
+function doReset() {
+  if (streamController) streamController.abort();
+  if (rec) { rec.abort(); rec = null; }
+  if (micStream) micStream.getTracks().forEach(track => track.stop());
+  if (audioContext) audioContext.close();
+  
+  apiKey = ''; lectureText = ''; questionText = ''; isPaused = false;
+  gainNode = null; audioContext = null; micStream = null; analyser = null;
+  
+  phase = 'setup'; 
+  hideErr(); 
+  render();
+}
+
+render();
+</script>
+</body>
+</html>
