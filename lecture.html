@@ -116,7 +116,12 @@
 let apiKey = '', phase = 'setup';
 let lectureText = '', questionText = '';
 // Убрали countdown и cdInterval, добавили isPaused
-let isPaused = false, rec = null, debugOpen = false;
+let isPaused = false, debugOpen = false;
+let mediaRecorder = null;
+let audioChunks = []; // Добавляем массив для сборки файла
+let chunkTimeout = null; // Таймер для 10-секундной нарезки
+let currentRecordingPhase = 'lecture'; // Что физически сейчас пишет диктофон
+let isWaitingForQuestion = false; // Флаг: ждем ли мы конца вопроса для отправки
 let streamController = null;
 
 // --- Microphone-related state ---
@@ -129,75 +134,177 @@ let selectedMicId = null;
 const showErr = (m) => { const e = document.getElementById('error-box'); e.innerHTML = m; e.style.display = 'block'; };
 const hideErr = () => { document.getElementById('error-box').style.display = 'none'; };
 
+// Вспомогательная функция для перевода аудио в base64
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+// Главная функция захвата аудио
 function initSpeech() {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) { showErr('Нужен <b>Chrome</b> — только он поддерживает распознавание речи.'); return; }
+  if (!micStream) { showErr('Микрофон не подключен!'); return; }
 
-  rec = new SR();
-  rec.lang = 'ru-RU';
-  rec.continuous = true;
-  rec.interimResults = true;
+  try {
+    mediaRecorder = new MediaRecorder(micStream, { mimeType: 'audio/webm' });
+    
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) audioChunks.push(e.data);
+    };
 
-  rec.onstart = () => console.log('🎙️ [Chrome] Микрофон запущен');
-  rec.onaudiostart = () => console.log('🔊 [Chrome] Начался захват аудио');
-  rec.onsoundstart = () => console.log('🔈 [Chrome] Обнаружен звук');
-  rec.onspeechstart = () => console.log('🗣️ [Chrome] Обнаружена человеческая речь');
-  rec.onnomatch = () => console.log('🤷 [Chrome] Речь не распознана сервером');
+    mediaRecorder.onstop = async () => {
+      const blob = new Blob(audioChunks, { type: 'audio/webm' });
+      audioChunks = [];
+      const phaseOfThisChunk = currentRecordingPhase; // Запоминаем, к чему относится этот кусок аудио
 
-  rec.onresult = (e) => {
-    let interimText = '';
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      const t = e.results[i][0].transcript;
-      if (e.results[i].isFinal) {
-        if (phase === 'lecture') lectureText += t.trim() + ' ';
-        if (phase === 'question') questionText += t.trim() + ' ';
-      } else {
-        interimText += t;
+      // 1. Сразу перезапускаем запись для новой фазы (если не на паузе и не ждем генерации ответов)
+      if (!isPaused && !isWaitingForQuestion) {
+         currentRecordingPhase = phase; // Обновляем цель записи
+         try { mediaRecorder.start(); } catch(e) {}
+
+         // Если пишем лекцию - ставим таймер нарезки. Если вопрос - пишем без остановки!
+         if (phase === 'lecture') {
+             chunkTimeout = setTimeout(() => {
+               if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
+             }, 25000);
+         }
       }
-    }
 
-    if (phase === 'lecture') {
+      // 2. Разбираемся с тем куском, который только что записали
+      if (blob.size > 1000) {
+         if (isWaitingForQuestion && phaseOfThisChunk === 'question') {
+             // Это финальный цельный кусок вопроса! Расшифровываем и сразу идем за ответами.
+             await transcribeQuestionAndAsk(blob);
+         } else {
+             // Это обычный кусок лекции (или хвост лекции перед вопросом)
+             transcribeAudioChunk(blob, phaseOfThisChunk);
+         }
+      } else if (isWaitingForQuestion) {
+         callGemini(); // Если ничего не записалось, но нажали Готово
+      }
+    };
+
+    // Запускаем самый первый цикл лекции
+    currentRecordingPhase = 'lecture';
+    mediaRecorder.start();
+    chunkTimeout = setTimeout(() => {
+      if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
+    }, 25000);
+
+  } catch (err) {
+    showErr('Ошибка инициализации диктофона: ' + err.message);
+  }
+}
+
+// Отправляем 10-секундный кусок в Gemini-2.0-flash
+async function transcribeAudioChunk(blob, targetPhase) {
+  try {
+    const base64Audio = await blobToBase64(blob);
+    
+    // 1. Делаем промпт максимально жестким, чтобы модель работала только как диктофон
+    const prompt = "Ты — автоматический модуль транскрибации. Твоя единственная цель — переводить речь в текст. У тебя нет режима диалога. Если на аудио полная тишина, неразборчивый шум, музыка, или ты не слышишь человеческой речи — ты ОБЯЗАН ответить ровно одним словом: ТИШИНА. Категорически запрещено просить прикрепить файл, извиняться или комментировать аудио.";
+    
+    // 2. Используем быструю и лимитную модель Gemini 3.1 Flash Lite Preview
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${apiKey}`;
+    
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [
+            { text: prompt },
+            { inlineData: { mimeType: "audio/webm", data: base64Audio } }
+          ]
+        }],
+        generationConfig: { temperature: 0.0 } // Убиваем фантазию нейросети на корню
+      })
+    });
+    
+    const data = await resp.json();
+    let text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+    
+    // 3. Жесткий фильтр мусора и извинений
+    const lowerText = text.toLowerCase();
+    const isJunk = 
+      lowerText.includes('тишина') || 
+      lowerText.includes('прикрепите') || 
+      lowerText.includes('аудиофайл') ||
+      lowerText.includes('не слышу') ||
+      lowerText.includes('пожалуйста') ||
+      text.length < 4;
+
+    // 4. Распределяем текст в зависимости от того, ЧТО ИМЕННО мы записывали (targetPhase)
+    if (text && !isJunk) {
+      if (targetPhase === 'lecture') {
+        lectureText += text + ' ';
+        
         const box = document.getElementById('lecture-box');
-        const finalEl = document.getElementById('lecture-final-text');
-        const interimEl = document.getElementById('lecture-interim-text');
-        const placeholder = box ? box.querySelector('.placeholder') : null;
-
-        if (finalEl) finalEl.textContent = lectureText;
-        if (interimEl) interimEl.textContent = interimText;
-        if (placeholder && (lectureText || interimText)) placeholder.style.display = 'none';
-        if (box) box.scrollTop = box.scrollHeight;
+        if (box) { 
+          const placeholder = box.querySelector('.placeholder');
+          if (placeholder) placeholder.style.display = 'none';
+          
+          const finalEl = document.getElementById('lecture-final-text');
+          if (finalEl) finalEl.textContent = lectureText;
+          
+          box.scrollTop = box.scrollHeight; 
+        }
         
         const wc = document.getElementById('word-count');
-        const totalWords = (lectureText + interimText).trim().split(/\s+/).filter(Boolean).length;
-        if (wc) wc.textContent = totalWords + ' слов';
-    }
-
-    if (phase === 'question') {
+        if (wc) wc.textContent = lectureText.trim().split(/\s+/).filter(Boolean).length + ' слов';
+      }
+      
+      if (targetPhase === 'question') {
+        questionText += text + ' ';
+        
         const box = document.getElementById('question-box');
-        const finalEl = document.getElementById('question-final-text');
-        const interimEl = document.getElementById('question-interim-text');
-        const placeholder = box ? box.querySelector('.placeholder') : null;
-
-        if (finalEl) finalEl.textContent = questionText;
-        if (interimEl) interimEl.textContent = interimText;
-        if (placeholder && (questionText || interimText)) placeholder.style.display = 'none';
+        if (box) {
+          const placeholder = box.querySelector('.placeholder');
+          if (placeholder) placeholder.style.display = 'none';
+          
+          const finalEl = document.getElementById('question-final-text');
+          if (finalEl) finalEl.textContent = questionText;
+        }
+      }
     }
-  };
+  } catch (e) { 
+    console.error('❌ Ошибка транскрибации:', e); 
+  }
+}
 
-  rec.onerror = (e) => {
-    console.error('❌ [Chrome] Ошибка:', e.error);
-    if (e.error === 'not-allowed') showErr('Доступ к микрофону запрещён. Нажми 🔒 в адресной строке и разреши микрофон для localhost.');
-    else if (e.error === 'network') showErr('Нет интернета — распознавание речи требует сеть.');
-    else if (e.error !== 'no-speech' && e.error !== 'aborted') showErr('Ошибка: ' + e.error);
-  };
+// Специальная функция: расшифровать вопрос и мгновенно дернуть Python-сервер
+async function transcribeQuestionAndAsk(blob) {
+  const thinkingLabel = document.querySelector('.thinking-label');
+  if (thinkingLabel) thinkingLabel.textContent = 'Распознаю твой вопрос...';
 
-  rec.onend = () => {
-    // Если запись прервалась, но мы НЕ нажимали паузу — перезапускаем автоматически
-    if ((phase === 'lecture' || phase === 'question') && !isPaused) {
-      console.log('🛑 [Chrome] Распознавание остановлено (перезапускаем...)');
-      setTimeout(() => { if (rec) { try { rec.start(); } catch(_) {} } }, 150);
-    }
-  };
+  try {
+    const base64Audio = await blobToBase64(blob);
+    const prompt = "Транскрибируй этот вопрос. Выведи ТОЛЬКО распознанный текст. Если тишина — ответь ТИШИНА.";
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent?key=${apiKey}`;
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: "audio/webm", data: base64Audio } }] }],
+        generationConfig: { temperature: 0.0 }
+      })
+    });
+
+    const data = await resp.json();
+    let text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+    const isJunk = text.toLowerCase().includes('тишина') || text.length < 4;
+
+    if (text && !isJunk) questionText += text + ' ';
+  } catch (e) {
+    console.error('Ошибка транскрибации вопроса:', e);
+  }
+
+  // Расшифровали - сразу запрашиваем ответы!
+  if (thinkingLabel) thinkingLabel.textContent = 'Ищу ответы в конспекте...';
+  callGemini();
 }
 
 async function populateMicList() {
@@ -305,7 +412,6 @@ function render() {
   }
 
   if (phase === 'lecture') {
-    // Меняем статус-бар в зависимости от того, на паузе мы или нет
     const statusHtml = isPaused 
       ? `<div class="dot" style="background: var(--yellow); animation: none;"></div><span class="status-label" style="color: var(--yellow);">ЗАПИСЬ ПРИОСТАНОВЛЕНА</span>`
       : `<div class="dot"></div><span class="status-label">Слушаю лекцию</span>`;
@@ -320,11 +426,14 @@ function render() {
           <span id="lecture-final-text">${lectureText}</span><span id="lecture-interim-text" style="color: #64748b"></span>
           ${!lectureText ? '<span class="placeholder">Говорите... текст появится здесь</span>' : ''}
         </div>
+        
         <div style="display: flex; gap: 8px; margin-bottom: 8px;">
-            <button class="btn btn-ghost" style="flex: 1; margin-bottom: 0;" onclick="togglePause()">${isPaused ? '▶ Продолжить запись' : '⏸ Пауза'}</button>
-            <button class="btn btn-ghost" style="flex: 1; margin-bottom: 0;" onclick="doClear()">Очистить текст</button>
+            <button class="btn btn-ghost" style="flex: 1; margin-bottom: 0; padding: 10px; font-size: 13px;" onclick="togglePause()">${isPaused ? '▶ Продолжить' : '⏸ Пауза'}</button>
+            <button class="btn btn-ghost" style="flex: 1; margin-bottom: 0; padding: 10px; font-size: 13px;" onclick="doClear()">Очистить</button>
+            <button class="btn btn-ghost" style="flex: 1; margin-bottom: 0; padding: 10px; font-size: 13px;" onclick="downloadLecture()">💾 Скачать</button>
         </div>
-        <button class="btn btn-danger" onclick="doStartQuestion()">❓  ВНИМАНИЕ, ВОПРОС!</button>
+        
+        <button class="btn btn-danger" onclick="doStartQuestion()">❓ ВНИМАНИЕ, ВОПРОС!</button>
       </div>`;
     return;
   }
@@ -342,7 +451,9 @@ function render() {
           <span id="question-final-text">${questionText}</span><span id="question-interim-text" style="color: #fde68a;"></span>
           ${!questionText ? '<span style="color:#fde68a; opacity: 0.6;">Слушаю вопрос...</span>' : ''}
         </div>
+        
         <button class="btn btn-primary" onclick="doFinish()">⚡ Готово — сгенерировать ответы</button>
+        <button class="btn btn-ghost" style="margin-top: 8px;" onclick="doContinueLecture()">🔙 Отмена (вернуться к записи лекции)</button>
       </div>`;
     return;
   }
@@ -362,25 +473,39 @@ function render() {
           <b style="color:var(--text)">Вопрос:</b><br>${questionText||'—'}<br><br>
           <b style="color:var(--text)">Лекция:</b><br>${lectureText||'—'}
         </div>
-        <button class="btn btn-ghost"  onclick="doReset()" style="margin-top: 16px;">Начать заново</button>
+        
+        <div style="display: flex; gap: 8px; margin-top: 16px;">
+          <button class="btn btn-primary" style="flex: 1; margin-bottom: 0; font-size: 13px; padding: 10px;" onclick="doStartQuestion()">❓ Ещё вопрос</button>
+          <button class="btn btn-ghost" style="flex: 1; margin-bottom: 0; font-size: 13px; padding: 10px;" onclick="doContinueLecture()">▶ Продолжить лекцию</button>
+        </div>
+        <div style="display: flex; gap: 8px; margin-top: 8px;">
+           <button class="btn btn-ghost" style="flex: 1; margin-bottom: 0; font-size: 13px; padding: 10px;" onclick="downloadLecture()">💾 Скачать .txt</button>
+           <button class="btn btn-ghost" style="flex: 1; margin-bottom: 0; font-size: 13px; padding: 10px;" onclick="doReset()">Сброс (с нуля)</button>
+        </div>
       </div>`;
     return;
   }
 }
-
 function toggleEye() { const inp = document.getElementById('api-key-input'); if (inp) inp.type = inp.type === 'password' ? 'text' : 'password'; }
 function toggleDbg() { debugOpen = !debugOpen; const p = document.getElementById('debug-panel'); if (p) p.classList.toggle('open', debugOpen); }
 
 function togglePause() {
   isPaused = !isPaused;
   if (isPaused) {
-    if (rec) rec.stop(); // Принудительно останавливаем микрофон
+    if (chunkTimeout) clearTimeout(chunkTimeout);
+    if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
   } else {
-    if (rec) {
-      try { rec.start(); } catch(e) {} // Снова запускаем, если сняли с паузы
+    if (mediaRecorder && mediaRecorder.state === 'inactive') {
+        currentRecordingPhase = phase;
+        mediaRecorder.start();
+        if (phase === 'lecture') {
+            chunkTimeout = setTimeout(() => {
+               if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
+            }, 25000);
+        }
     }
   }
-  render(); // Обновляем интерфейс
+  render();
 }
 
 function doSetup() {
@@ -403,7 +528,6 @@ function doSetup() {
         isPaused = false;
         render();
         initSpeech();
-        rec.start();
     }
 }
 
@@ -416,23 +540,35 @@ function handleMonitorToggle(isChecked) {
 }
 
 function doStartQuestion() {
-  if (!lectureText.trim()) { showErr('Лекция ещё не распознана — подожди пока препод заговорит.'); return; }
+  if (!lectureText.trim()) { showErr('Лекция ещё не распознана.'); return; }
+  if (streamController) streamController.abort(); // Добавили прерывание генерации
+  
   hideErr();
   phase = 'question'; 
   questionText = ''; 
-  
-  // Если была пауза, снимаем её перед тем как слушать вопрос
-  if (isPaused) {
-      isPaused = false;
-      if (rec) { try { rec.start(); } catch(e){} }
+  isWaitingForQuestion = false;
+  isPaused = false;
+
+  if (chunkTimeout) clearTimeout(chunkTimeout);
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+      mediaRecorder.stop(); 
+  } else if (mediaRecorder) {
+      currentRecordingPhase = 'question';
+      try { mediaRecorder.start(); } catch(e){}
   }
   render();
 }
 
 function doFinish() {
   phase = 'streaming';
+  isWaitingForQuestion = true; // Даем сигнал, что следующий стоп - это финал
   render();
-  callGemini();
+
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+      mediaRecorder.stop(); // Обрываем запись вопроса, onstop вызовет transcribeQuestionAndAsk
+  } else {
+      callGemini();
+  }
 }
 
 async function callGemini() {
@@ -543,18 +679,59 @@ function addAnswerCard({model, answer, error}) {
 
 function doContinue() { phase = 'lecture'; render(); }
 function doClear() { lectureText = ''; render(); }
+// Функция скачивания текста лекции
+function downloadLecture() {
+  if (!lectureText.trim()) {
+    alert('Текст лекции пока пуст!');
+    return;
+  }
+  // Создаем текстовый файл в памяти браузера
+  const blob = new Blob([lectureText.trim()], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  
+  // Имитируем клик по ссылке для скачивания
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'Конспект_лекции.txt';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// Функция возврата к записи лекции после ответа на вопрос
+function doContinueLecture() {
+  if (streamController) streamController.abort(); // Отменяем поток генерации, если он еще идет
+  hideErr();
+  phase = 'lecture';
+  isWaitingForQuestion = false;
+  isPaused = false;
+
+  if (chunkTimeout) clearTimeout(chunkTimeout);
+  
+  // Перезапускаем диктофон в режим лекции (с таймером по 10 сек)
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+      mediaRecorder.stop(); // Вызовет onstop и автоматически запустит новый цикл лекции
+  } else if (mediaRecorder) {
+      currentRecordingPhase = 'lecture';
+      try { mediaRecorder.start(); } catch(e){}
+      chunkTimeout = setTimeout(() => {
+          if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
+      }, 25000);
+  }
+  render();
+}
 function doReset() {
   if (streamController) streamController.abort();
-  if (rec) { rec.abort(); rec = null; }
+  if (chunkTimeout) clearTimeout(chunkTimeout); // Сбрасываем таймер
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
   if (micStream) micStream.getTracks().forEach(track => track.stop());
   if (audioContext) audioContext.close();
   
   apiKey = ''; lectureText = ''; questionText = ''; isPaused = false;
-  gainNode = null; audioContext = null; micStream = null; analyser = null;
+  gainNode = null; audioContext = null; micStream = null; analyser = null; mediaRecorder = null;
   
-  phase = 'setup'; 
-  hideErr(); 
-  render();
+  phase = 'setup'; hideErr(); render();
 }
 
 render();

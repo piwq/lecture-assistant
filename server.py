@@ -4,11 +4,13 @@ import docx
 import os
 import json
 import concurrent.futures
+import threading
 
 app = Flask(__name__)
 
 # --- CONFIG ---
 DOCX_FILENAME = "lecture.docx"
+doc_lock = threading.Lock() # Блокировка для безопасной записи из разных потоков
 
 # Полный список доступных текстовых моделей из твоего API
 MODELS_TO_QUERY = [
@@ -31,23 +33,34 @@ MODELS_TO_QUERY = [
 ]
 # --- HELPERS ---
 
-def save_to_docx(question, answer_text):
-    """Saves the question and answer to a DOCX file."""
-    try:
-        if os.path.exists(DOCX_FILENAME):
-            doc = docx.Document(DOCX_FILENAME)
-        else:
-            doc = docx.Document()
+def log_request_to_docx(lecture, question):
+    """Записывает начало блока (Лекция + Вопрос) в файл перед ответами моделей."""
+    with doc_lock:
+        try:
+            doc = docx.Document(DOCX_FILENAME) if os.path.exists(DOCX_FILENAME) else docx.Document()
+            doc.add_heading('=' * 20 + ' НОВЫЙ ЗАПРОС ' + '=' * 20, level=1)
+            doc.add_heading('Конспект лекции:', level=2)
+            doc.add_paragraph(lecture if lecture else "(Текст лекции пуст)")
+            doc.add_heading('Вопрос преподавателя:', level=2)
+            doc.add_paragraph(question if question else "(Вопрос не распознан)")
+            doc.add_heading('Ответы нейросетей:', level=2)
+            doc.save(DOCX_FILENAME)
+        except Exception as e:
+            print(f"❌ Ошибка записи лекции в DOCX: {e}")
 
-        doc.add_heading('Вопрос:', level=2)
-        doc.add_paragraph(question)
-        doc.add_heading('Ответ:', level=3)
-        doc.add_paragraph(answer_text)
-        doc.add_paragraph('-' * 40)
-        doc.save(DOCX_FILENAME)
-    except Exception as e:
-        print(f"❌ Ошибка сохранения в DOCX: {e}")
-
+def log_answer_to_docx(model_name, answer_text):
+    """Аккуратно дописывает ответ конкретной модели в конец файла."""
+    with doc_lock:
+        try:
+            doc = docx.Document(DOCX_FILENAME) if os.path.exists(DOCX_FILENAME) else docx.Document()
+            # Добавляем жирным шрифтом название модели и затем её ответ
+            p = doc.add_paragraph()
+            p.add_run(f"[{model_name}]: ").bold = True
+            p.add_run(answer_text)
+            doc.save(DOCX_FILENAME)
+        except Exception as e:
+            print(f"❌ Ошибка записи ответа в DOCX: {e}")
+            
 def generate_and_format(model_name, lecture, question, api_key):
     """Synchronously generates and formats an answer from a single model."""
     try:
@@ -85,7 +98,7 @@ def generate_and_format(model_name, lecture, question, api_key):
         )
         formatted_answer = response2.text.strip()
         
-        save_to_docx(question, f"({model_name}) {formatted_answer}")
+        log_answer_to_docx(model_name, formatted_answer)
 
         return {"model": model_name, "answer": formatted_answer}
 
@@ -109,6 +122,8 @@ def ask():
     if not all([api_key, lecture, question]):
         return "Missing required fields", 400
 
+    log_request_to_docx(lecture, question)
+    
     def event_stream():
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(MODELS_TO_QUERY)) as executor:
             futures = [
