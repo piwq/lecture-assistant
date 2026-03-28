@@ -1,5 +1,6 @@
 def solve():
     T = int(input())
+    results = []
     for _ in range(T):
         N, K = map(int, input().split())
         
@@ -31,6 +32,8 @@ def solve():
                 mex += 1
             G[d] = mex
         
-        print("Geralt" if G[N] != 0 else "Vesemir")
+        results.append("Geralt" if G[N] != 0 else "Vesemir")
+    
+    print('\n'.join(results))
 
 solve()
