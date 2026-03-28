@@ -1,48 +1,56 @@
-def solve():
-    T = int(input())
-    results = []
-    for _ in range(T):
-        xp, yp, xn, yn, S = map(int, input().split())
-        if S == 1:
-            results.append("NO")
-            continue
+import sys
 
-        dx, dy = xp - xn, yp - yn
+def main():
+    data = sys.stdin.buffer.read().split()
+    idx = 0
+    N = int(data[idx]); idx += 1
 
-        if S == 2:
-            cands = [
-                ((-1,-1),(1,-1),(0,1)),
-                ((-1,1),(1,1),(0,-1)),
-                ((-1,1),(-1,-1),(1,0)),
-                ((1,-1),(1,1),(-1,0)),
-            ]
-        else:
-            cands = [
-                ((-1,-1),(1,-1),(-1,S-1)),
-                ((-1,1),(1,1),(-1,1-S)),
-                ((-1,-1),(-1,1),(S-1,-1)),
-                ((1,-1),(1,1),(1-S,-1)),
-                ((-1,-1),(1,-1),(1,S-1)),
-                ((-1,1),(1,1),(1,1-S)),
-                ((-1,1),(-1,-1),(S-1,1)),
-                ((1,1),(1,-1),(1-S,1)),
-            ]
+    rank = [1] * (N + 1)      # ранг поддерева (актуален для корней)
+    sub  = [0] * (N + 1)      # кол-во подчинённых (актуален для корней)
+    depth_abs = [0] * (N + 1) # глубина от корня своего дерева
+    uf = list(range(N + 1))   # union-find
 
-        found = False
-        for a, b, c in cands:
-            d1 = (b[0]-a[0])*(dy-a[1]) - (b[1]-a[1])*(dx-a[0])
-            d2 = (c[0]-b[0])*(dy-b[1]) - (c[1]-b[1])*(dx-b[0])
-            d3 = (a[0]-c[0])*(dy-c[1]) - (a[1]-c[1])*(dx-c[0])
-            outside = not (d1>=0 and d2>=0 and d3>=0) and not (d1<=0 and d2<=0 and d3<=0)
-            if outside:
-                results.append("YES")
-                results.append("{} {} {} {} {} {}".format(
-                    a[0]+xn, a[1]+yn, b[0]+xn, b[1]+yn, c[0]+xn, c[1]+yn))
-                found = True
-                break
-        if not found:
-            results.append("NO")
+    def find(v):
+        while uf[v] != v:
+            uf[v] = uf[uf[v]]  # сжатие пути (two-step)
+            v = uf[v]
+        return v
 
-    print('\n'.join(results))
+    # Изначально все узлы — корни: ранг=1, подчинённых=0, макс. номер=N
+    best_rank_val  = 1;  best_rank_node  = N
+    best_sub_val   = 0;  best_sub_node   = N
 
-solve()
+    out = []
+
+    for _ in range(N - 1):
+        A = int(data[idx]); idx += 1
+        B = int(data[idx]); idx += 1
+
+        R = find(B)
+
+        # Глубина A в новом дереве фиксируется навсегда
+        depth_abs[A] = depth_abs[B] + 1
+
+        # Обновляем ранг корня R
+        new_rank = depth_abs[B] + 1 + rank[A]
+        if new_rank > rank[R]:
+            rank[R] = new_rank
+
+        # Обновляем подчинённых корня R
+        sub[R] += sub[A] + 1
+
+        # A больше не корень
+        uf[A] = R
+
+        # Обновляем лучших
+        if rank[R] > best_rank_val or (rank[R] == best_rank_val and R > best_rank_node):
+            best_rank_val = rank[R];  best_rank_node = R
+
+        if sub[R] > best_sub_val or (sub[R] == best_sub_val and R > best_sub_node):
+            best_sub_val = sub[R];  best_sub_node = R
+
+        out.append(f"{best_rank_node} {best_rank_val} {best_sub_node} {best_sub_val}")
+
+    sys.stdout.write('\n'.join(out) + '\n')
+
+main()
